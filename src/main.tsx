@@ -5,9 +5,35 @@ import { createRoot } from "react-dom/client";
 
 import { WavRecorder, WavStreamPlayer } from "./wav";
 import { App } from "./App";
-import { RealtimeClient } from "@openai/realtime-api-beta";
-import { instructions, relayUrl } from "./config";
-import { unloggedEventTypes, sampleRate } from "./config";
+import {
+  RealtimeClient,
+  RealtimeCustomEvents,
+  RealtimeEvent,
+  RealtimeServerEvents,
+} from "openai-realtime-api";
+
+const relayUrl = `ws://localhost:${import.meta.env.VITE_RELAY_PORT}`;
+const sampleRate = 24000;
+
+const noLogEventTypes = [
+  "session.update",
+  "session.updated",
+  "input_audio_buffer.append",
+  "response.audio.delta",
+  "response.audio_transcript.delta",
+  "input_audio_buffer.speech_started",
+  "input_audio_buffer.committed",
+  "response.audio_transcript.delta",
+  "response.audio_transcript.done",
+  "response.function_call_arguments.delta",
+  "response.content_part.done",
+  "input_audio_buffer.speech_stopped",
+  "rate_limits.updated",
+];
+
+const instructions = `
+You are a conversational assistant.
+`.trim();
 
 // resources
 const reactRoot = createRoot(document.getElementById("root")!);
@@ -27,25 +53,16 @@ function init() {
   render("💤");
 
   realtimeClient.updateSession({
+    instructions,
     turn_detection: {
       type: "server_vad",
     },
-    instructions,
   });
 
-  realtimeClient.addTool(
-    {
-      name: "get_current_date_and_time",
-      parameters: {},
-      description: "Gets the current date and time.",
-    },
-    () => "current date and time:" + new Date().toLocaleString()
-  );
-
-  realtimeClient.on("conversation.interrupted", onAiInterrupted);
-  realtimeClient.on("conversation.updated", onAiUpdated);
-  realtimeClient.on("realtime.event", logEvent);
-  realtimeClient.on("error", onAiError);
+  realtimeClient.on("conversation.interrupted", (e) => onAiInterrupted(e));
+  realtimeClient.on("conversation.updated", (e) => onAiUpdated(e));
+  realtimeClient.on("realtime.event", (e) => logEvent(e));
+  realtimeClient.on("error", (e) => onAiError(e));
 
   document.addEventListener("click", toggleActive);
 }
@@ -84,7 +101,11 @@ async function stop() {
   ]);
 }
 
-async function onAiUpdated({ item, delta }: any) {
+async function onAiUpdated({
+  item,
+  delta,
+  type,
+}: RealtimeCustomEvents.ConversationUpdatedEvent) {
   if (delta?.audio) {
     wavStreamPlayer.add16BitPCM(delta.audio, item.id);
   }
@@ -100,7 +121,9 @@ async function onAiUpdated({ item, delta }: any) {
   }
 }
 
-async function onAiInterrupted() {
+async function onAiInterrupted(
+  e: RealtimeCustomEvents.ConversationInterruptedEvent
+) {
   const trackSampleOffset = await wavStreamPlayer.interrupt();
   if (trackSampleOffset?.trackId) {
     const { trackId, offset } = trackSampleOffset;
@@ -108,7 +131,7 @@ async function onAiInterrupted() {
   }
 }
 
-function onAiError(event: any) {
+function onAiError(event: RealtimeServerEvents.ErrorEvent) {
   console.error(event);
 }
 
@@ -125,16 +148,7 @@ function logEvent(e: RealtimeEvent) {
   const event = e.event;
   const type = e.event.type;
 
-  if (unloggedEventTypes.includes(type)) return;
+  if (noLogEventTypes.includes(type)) return;
 
   console.log(type, event);
-}
-
-// types
-
-interface RealtimeEvent {
-  time: string;
-  source: "client" | "server";
-  count?: number;
-  event: { [key: string]: any };
 }
